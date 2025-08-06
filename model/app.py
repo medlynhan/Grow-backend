@@ -5,6 +5,7 @@ from flask_cors import CORS                              # (2)
 import joblib                                            # (3)
 import pandas as pd                                      # (4)
 import numpy as np                                       # (5)
+import requests
 
 # (6) Inisialisasi Flask + aktifkan CORS supaya bisa di‐fetch dari Next.js/React
 app = Flask(__name__)
@@ -26,53 +27,77 @@ def home():
 
 
 @app.route('/predict', methods=['POST'])
+@app.route('/predict', methods=['POST'])
 def predict():
-    # (9) 1) Baca JSON body: 
-    #      { 
-    #        "SOIL TYPE": "...", 
-    #        "REGION": "...", 
-    #        "TEMPERATURE": 30.5, 
-    #        "WEATHER CONDITION": "..."
-    #      }
+    # Terima data JSON yang dikirim dari Node.js
     data = request.get_json()
-    required = ['SOIL TYPE','REGION','TEMPERATURE','WEATHER CONDITION']
-    if not data or any(k not in data for k in required):
-        return jsonify({'error': f'Missing one of fields {required}'}), 400
 
-    # (10) Buat DataFrame 1 baris dari input mentah
-    df = pd.DataFrame([{
-        'SOIL TYPE': data['SOIL TYPE'],
-        'REGION': data['REGION'],
-        'TEMPERATURE': data['TEMPERATURE'],
-        'WEATHER CONDITION': data['WEATHER CONDITION'],
-    }])
+    # Pastikan data berupa list (array)
+    if not isinstance(data, list):
+        return jsonify({'error': 'Data must be an array of objects'}), 400
 
-    # (11) One-hot encode persis seperti saat training
-    df_encoded = pd.get_dummies(df, columns=['SOIL TYPE','REGION','WEATHER CONDITION'])
+    # Log data yang diterima
+    print(f"Received data: {data}")
 
-    # (12) Pastikan kolomnya sama persis dengan yang dipakai model:
-    #       jika ada kolom yang hilang, isi 0; jika ada kolom ekstra, buang
-    df_encoded = df_encoded.reindex(columns=FEATURE_NAMES, fill_value=0)
+    # List untuk menyimpan hasil prediksi
+    results = []
 
-    # (13) Konversi ke numpy array 2D: shape (1, n_features)
-    x = df_encoded.to_numpy()
+    # Proses setiap item dalam array
+    for item in data:
+        # Pastikan semua field yang diperlukan ada di tiap item
+        required = ['SOIL TYPE', 'REGION', 'TEMPERATURE', 'WEATHER CONDITION']
+        if not all(k in item for k in required):
+            return jsonify({'error': f'Missing one of fields {required}'}), 400
 
-    # (14) Jalankan prediksi
+        # Buat DataFrame dari data item yang diterima
+        df = pd.DataFrame([{
+            'SOIL TYPE': item['SOIL TYPE'],
+            'REGION': item['REGION'],
+            'TEMPERATURE': item['TEMPERATURE'],
+            'WEATHER CONDITION': item['WEATHER CONDITION'],
+        }])
+
+        # One-hot encode data sesuai dengan training
+        df_encoded = pd.get_dummies(df, columns=['SOIL TYPE', 'REGION', 'WEATHER CONDITION'])
+        df_encoded = df_encoded.reindex(columns=FEATURE_NAMES, fill_value=0)
+        x = df_encoded.to_numpy()
+
+        try:
+            # Prediksi menggunakan model
+            y_pred = model.predict(x)
+            # Hitung confidence (deviasi standar dari prediksi masing-masing tree)
+            all_tree_preds = np.stack([t.predict(x) for t in model.estimators_], axis=0)
+            confidence = float(all_tree_preds.std())
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+        # Log prediksi dan confidence untuk debugging
+        print(f"Prediction for {item}: {y_pred.tolist()}")
+        print(f"Confidence for {item}: {confidence}")
+
+        # Simpan hasil prediksi dan confidence ke dalam list results
+        results.append({
+            'prediction': y_pred.tolist(),
+            'confidence': confidence
+        })
+
+    # Kirim data hasil prediksi ke Node.js menggunakan requests
     try:
-        y_pred = model.predict(x)           # output array shape (1,)
-        # (15) Hitung “confidence” sebagai standar deviasi prediksi tiap tree
-        all_tree_preds = np.stack([t.predict(x) for t in model.estimators_], axis=0)
-        confidence = float(all_tree_preds.std())
+        # Kirim data hasil prediksi ke Node.js
+        node_url = 'http://localhost:8000/receivePrediction'
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(node_url, json=results, headers=headers)
+
+        # Pastikan data diterima oleh Node.js
+        print("Data berhasil dikirim ke Node.js:", response.text)
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"Error sending data to Node.js: {str(e)}")
 
-    # (16) Kembalikan JSON berisi prediksi dan confidence
-    return jsonify({
-        'prediction': y_pred.tolist(),      # [ 55.3 ]
-        'confidence': confidence            # misal 4.21
-    })
+    # Kembalikan semua prediksi dan confidence ke client (Node.js)
+    return jsonify(results)
 
-# (17) Run server di port 5000
+
+# Menjalankan server Flask pada port 5000 (atau port lain yang kamu tentukan)
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
- 
+    app.run(debug=True, port=5000)  # Gunakan port 5000, atau ganti jika diperlukan
