@@ -41,7 +41,7 @@ let cropType = "RICE";
 let soilStatus ; //output
 let optimalMoisture ; //output
 let soilMoisture ; //output
-
+let notificationMessage; //output
 //array 
 let waterRequirementFor5Days = []; //output
 let temperatureFor5Days = [];  //output
@@ -144,6 +144,18 @@ const postSoilMoistureData = async (coordinates) => {
   }
 };
 
+
+const makeNotificationMessage = (kelembapanTanah, kelembapanOptimal) => {
+  if (kelembapanTanah < kelembapanOptimal.min) {
+    return `Kelembapan tanah saat ini ${kelembapanOptimal.min - kelembapanTanah}% di bawah batas minimum optimal. Segera lakukan penyiraman untuk menjaga kesehatan tanaman.`;
+  } else if (kelembapanTanah > kelembapanOptimal.max) {
+    return `Kelembapan tanah saat ini ${kelembapanTanah - kelembapanOptimal.max}% melebihi batas maksimum optimal. Pertimbangkan untuk mengurangi frekuensi penyiraman guna mencegah genangan.`;
+  } else {
+    return `Kelembapan tanah berada dalam rentang optimal. Tanaman Anda dalam kondisi yang baik.`;
+  }
+};
+
+
 // Fungsi untuk mengambil data kelembapan tanah setelah task_id selesai
 const getSoilMoistureData = async (task_id) => {
   const url_get = `https://api-connect.eos.com/api/gdw/api/${task_id}?api_key=${eosdaApiKey}`;
@@ -161,7 +173,7 @@ const getSoilMoistureData = async (task_id) => {
 
       if (response_get.data.result && response_get.data.result.length > 0) {
         console.log("Tugas selesai. Mengambil hasil...");
-        soilMoisture = response_get.data.result[0].average; // Ambil hasil kelembapan tanah
+        soilMoisture = parseFloat(response_get.data.result[0].average.toFixed(1)); // Ambil hasil kelembapan tanah
         console.log("Data Soil Moisture:", soilMoisture);
         return soilMoisture;
       } else {
@@ -314,9 +326,9 @@ weatherData.list.forEach(entry => {
   if (dayIndex === -1) {
     // Jika belum ada data untuk tanggal ini, tambahkan objek baru untuk suhu dan cuaca
     temperatureFor5Days.push({
-      date: date,
-      min: temperature,
-      max: temperature
+    date: date,
+    min: parseFloat(temperature.toFixed(0)), // Mengatur 0 angka di belakang koma
+    max: parseFloat(temperature.toFixed(0))  // Mengatur 0 angka di belakang koma
     });
     weatherFor5Days.push({
       date: date,
@@ -325,10 +337,10 @@ weatherData.list.forEach(entry => {
   } else {
     // Jika sudah ada, update min/max temperature dan kondisi cuaca
     if (temperature < temperatureFor5Days[dayIndex].min) {
-      temperatureFor5Days[dayIndex].min = temperature;
+      temperatureFor5Days[dayIndex].min = parseFloat(temperature.toFixed(0));;
     }
     if (temperature > temperatureFor5Days[dayIndex].max) {
-      temperatureFor5Days[dayIndex].max = temperature;
+      temperatureFor5Days[dayIndex].max = parseFloat(temperature.toFixed(0));;
     }
     weatherFor5Days[dayIndex].conditions.push(weatherClassification); // Menambahkan cuaca yang sudah diklasifikasikan
   }
@@ -355,7 +367,7 @@ weatherData.list.forEach(entry => {
 });
 
   // Menampilkan hasil
-  console.log("Processed results for each 3-hour interval:", results);
+  //console.log("Processed results for each 3-hour interval:", results);
   return results;
 
 
@@ -364,16 +376,21 @@ weatherData.list.forEach(entry => {
 
 const sendToFlaskAPI = async (result) => {
   try {
+    // Debug: Memastikan data yang dikirimkan ke Flask API
+    console.log("Sending data to Flask API:", result);
+
     // Mengirim data ke Flask API untuk prediksi
     const modelResult = await axios.post('http://127.0.0.1:5000/predict', result);
-    console.log("Response dari Flask API:", modelResult.data);
+    
+    // Debug: Memastikan respons dari Flask API
+    console.log("Response from Flask API:", modelResult.data);
 
     // Mengelompokkan hasil prediksi berdasarkan tanggal dan menghitung rata-rata
     modelResult.data.forEach(prediction => {
       const predictionDate = prediction.date.split(' ')[0];  // Ambil tanggal saja (misalnya "2025-08-07")
       const predictionValue = prediction.prediction[0]; // Ambil nilai prediksi
 
-      // Cek apakah sudah ada tanggal yang sama di weatherFor5Days
+      // Cek apakah sudah ada tanggal yang sama di waterRequirementFor5Days
       let dayIndex = waterRequirementFor5Days.findIndex(day => day.date === predictionDate);
 
       if (dayIndex !== -1) {
@@ -395,22 +412,18 @@ const sendToFlaskAPI = async (result) => {
 
     // Menghitung rata-rata prediksi untuk setiap tanggal
     waterRequirementFor5Days.forEach(day => {
-      // Menghitung rata-rata prediksi
       const totalPrediction = day.predictions.reduce((sum, value) => sum + value, 0);
       const averagePrediction = (totalPrediction / day.predictions.length).toFixed(2); // Membatasi 2 angka di belakang koma
 
       // Menyimpan rata-rata prediksi dan menghapus kolom conditions
       day.prediction = [parseFloat(averagePrediction)];
 
-      // Menghapus kolom conditions
-      delete day.conditions;
-
       // Menampilkan hasil rata-rata prediksi untuk setiap tanggal
       console.log(`Average prediction for ${day.date}: ${averagePrediction}`);
     });
 
-    // Menampilkan weatherFor5Days setelah semua data diproses
-    console.log("Processed weatherFor5Days:", waterRequirementFor5Days);
+    // Menampilkan waterRequirementFor5Days setelah semua data diproses
+    console.log("Processed waterRequirementFor5Days:", waterRequirementFor5Days);
 
   } catch (error) {
     console.error("Terjadi kesalahan saat mengirim data ke Flask:", error);
@@ -422,10 +435,11 @@ const sendToFlaskAPI = async (result) => {
 
 
 
-// Kirim data ke Flask API
+
+//Kirim data ke Flask API
 
 // Memulai pengambilan dan pemrosesan data
-const main = async () => {
+const processedData = async () => {
   // Proses untuk mengambil dan memproses data cuaca dan kelembapan tanah
   const results = await processWeatherAndSoilData(coordinatesForWeather);
   
@@ -451,54 +465,113 @@ const main = async () => {
   // Jika ingin mengirim ke Flask API, uncomment line berikut
   await sendToFlaskAPI(results);
   console.log("Water Requirement for 5 Days:", waterRequirementFor5Days); // Output kebutuhan air untuk 5 hari
+
+  notificationMessage = makeNotificationMessage(soilMoisture,optimalMoisture);
+
+  return {
+    cropType,
+    soilMoisture,
+    optimalMoisture,
+    notificationMessage,
+    soilStatus,
+    temperatureFor5Days,
+    weatherFor5Days,
+    waterRequirementFor5Days
+  };
+
 };
 
-main()
-// // Jalankan proses utama
 
-// // API endpoint untuk menerima data dari Next.js
-// app.post('/getFieldData', (req, res) => {
-//   console.log("Received data from Next.js:", req.body);
+app.get('/getProcessedData', async (req, res) => {
+  console.log('GET request received for /getProcessedData');
+  try {
+    // Menunggu hingga processedData selesai
+    const processedDataResult = await processedData();
 
-//   const { crop_type, lat, lon, soil_moisture } = req.body;  // Mengambil data dari request body
-//   console.log("Received crop_type:", crop_type);
-//   console.log("Received lat:", lat);
-//   console.log("Received lon:", lon);
-//   console.log("Received soil_moisture:", soil_moisture);
+    // Mengirimkan data hasil pemrosesan langsung
+    res.json({
+      status: 'success',
+      message: 'Data received and processed successfully!',
+      data: processedDataResult // Mengirimkan hasil yang sudah diproses
+    });
 
-//   // Lakukan pemrosesan yang diperlukan
-//   cropType = crop_type;  // Menyimpan crop_type ke variabel global
-//   optimalMoisture = getCropOptimalSoilMoisture(crop_type);  // Menentukan kelembapan tanah optimal berdasarkan crop_type
-//   coordinatesForSoilMoisture = getCoordinatesForSoilMoisture(lat, lon);  // Menyimpan koordinat untuk kelembapan tanah
-//   coordinatesForWeather = [lat[0], lon[0]];  // Menyimpan koordinat pertama untuk cuaca
-
-//   // Mendapatkan status kelembapan tanah
-//   soilStatus = getSoilStatus(cropType, soil_moisture);
-
-//   // Kirimkan respons ke Next.js bahwa data sudah diterima dan diproses
-//   res.json({
-//     status: 'success',
-//     message: 'Data received successfully!',
-//     crop_type: cropType,  // Mengirim kembali data yang diterima
-//     optimal_moisture: optimalMoisture,
-//     soil_status: soilStatus,  // Menyertakan status kelembapan tanah
-//     coordinates_for_soil_moisture: coordinatesForSoilMoisture,
-//     coordinates_for_weather: coordinatesForWeather
-//   });
-
-
-// });
-
-
-
-app.post('/receivePrediction', (req, res) => {
-  console.log("Received data from Flask API:", req.body);
-
-  
-  res.json({ status: 'success', message: 'Data received successfully!' });
+  } catch (error) {
+    console.error('Error while processing data:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'There was an error processing the data.'
+    });
+  }
 });
 
 
-// app.listen(8000, () => {
-//   console.log("Server listening on port 8000...");
-// });
+
+// // Jalankan proses utama
+
+// // API endpoint untuk menerima data dari Next.js
+app.post('/getFieldData', (req, res) => {
+  console.log("Received data from Next.js:", req.body);
+
+  const { crop_type, lat, lon, soil_moisture } = req.body;  // Mengambil data dari request body
+  console.log("Received crop_type:", crop_type);
+  console.log("Received lat:", lat);
+  console.log("Received lon:", lon);
+
+  // Lakukan pemrosesan yang diperlukan
+  cropType = crop_type;  // Menyimpan crop_type ke variabel global
+  console.log("Set cropType to:", cropType);  // Menampilkan nilai cropType setelah diset
+
+  optimalMoisture = getCropOptimalSoilMoisture(crop_type);  // Menentukan kelembapan tanah optimal berdasarkan crop_type
+  console.log("Calculated optimalMoisture for cropType:", optimalMoisture);  // Menampilkan nilai optimalMoisture
+
+  coordinatesForWeather = [lat[0], lon[0]];  // Menyimpan koordinat pertama untuk cuaca
+  console.log("Coordinates for weather:", coordinatesForWeather);  // Menampilkan koordinat untuk cuaca
+
+  // Kirimkan respons ke Next.js bahwa data sudah diterima dan diproses
+  res.json({
+    status: 'success',
+    message: 'Data received successfully!',
+    crop_type: cropType,  // Mengirim kembali data yang diterima  // Menyertakan status kelembapan tanah
+    coordinates_for_soil_moisture: coordinatesForSoilMoisture,
+    coordinates_for_weather: coordinatesForWeather
+  });
+});
+
+
+
+
+app.post('/receivePrediction', async (req, res) => {
+  //console.log("Received data from Flask API:", req.body);  // Menerima data dari Flask API
+  try {
+    // Proses data yang diterima dari Flask API
+    const predictionData = req.body; // Ambil data dari body request
+
+    // Misalnya, Anda bisa memproses data prediksi, seperti menyimpannya ke dalam array atau database
+    // Contoh: Menggunakan data prediksi untuk menghitung sesuatu
+    const processedPredictionData = predictionData.map(prediction => {
+      // Lakukan proses yang diperlukan dengan data prediksi
+      console.log(`Prediction for ${prediction.date}: ${prediction.prediction[0]}`);
+      return prediction; // Contoh, hanya mengembalikan data yang diterima
+    });
+
+    // Mengirimkan respons ke Flask untuk konfirmasi bahwa data telah diproses
+    res.json({
+      status: 'success',
+      message: 'Prediction data received and processed successfully!',
+      data: processedPredictionData,  // Data hasil pemrosesan
+    });
+
+  } catch (error) {
+    console.error('Error while receiving data from Flask:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'There was an error while processing the received data.',
+    });
+  }
+});
+
+
+
+app.listen(port, () => {
+  console.log("Server listening on port 8000...");
+});
