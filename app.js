@@ -25,7 +25,7 @@ app.get('/', (req, res) => {
 
 
 
-// API Key EOSDA
+
 // API Key EOSDA
 const eosdaApiKey = 'apk.82865964941558af9e9fc9ce14bc45c62a7cdbc74aeba516061c231dcce6e50e';
 
@@ -33,14 +33,63 @@ const eosdaApiKey = 'apk.82865964941558af9e9fc9ce14bc45c62a7cdbc74aeba516061c231
 const openWeatherApiKey = '4059f80544cfd676151e001f79d553f0';
 
 // Koordinat yang diinginkan
-const coordinatesForSoilMoisture = [
-  [112.66655514905385, -7.9396023774109095],
-  [112.66700000000000, -7.9390000000000000],
-  [112.66750000000000, -7.9395000000000000],
-  [112.66655514905385, -7.9396023774109095]
-];
+let coordinatesForSoilMoisture = [[112.666555149054, -7.93960237741091],[112.667, -7.939],[112.6675, -7.9395],[112.666555149054, -7.93960237741091]];
+let coordinatesForWeather = [112.666555149054,-7.93960237741091];
 
-const coordinatesForWeather = coordinatesForSoilMoisture[0]; // Gunakan hanya 1 koordinat
+let cropType = "RICE";
+
+let soilStatus ; //output
+let optimalMoisture ; //output
+let soilMoisture ; //output
+
+//array 
+let waterRequirementFor5Days = []; //output
+let temperatureFor5Days = [];  //output
+let weatherFor5Days = [];  //output
+
+// Fungsi untuk mendapatkan kelembapan tanah optimal berdasarkan jenis tanaman
+const getCropOptimalSoilMoisture = (crop_type) => {
+  if (crop_type === "RICE") {
+    return { min: 60, max: 80 };
+  } else if (crop_type === "TOMATO") {
+    return { min: 50, max: 70 };
+  } else if (crop_type === "CABBAGE") {
+    return { min: 60, max: 70 };
+  } else if (crop_type === "BANANA") {
+    return { min: 70, max: 85 };
+  }
+  return { min: 0, max: 0 };  // Default untuk tanaman yang tidak dikenal
+}
+
+// Fungsi untuk mendapatkan status kelembapan tanah berdasarkan jenis tanaman dan nilai kelembapan tanah
+const getSoilStatus = (cropType, soilMoisture) => {
+  const { min, max } = getCropOptimalSoilMoisture(cropType);
+
+  // Jika kelembapan tanah lebih kecil dari nilai minimum
+  if (soilMoisture < min) {
+    return 'Kering';  // Status tanah kering
+  }
+  // Jika kelembapan tanah sama dengan nilai optimal (dalam rentang)
+  else if (soilMoisture >= min && soilMoisture <= max) {
+    return 'Optimal';  // Status tanah optimal
+  }
+  // Jika kelembapan tanah lebih besar dari nilai maksimum
+  else {
+    return 'Terlalu Lembab';  // Status tanah terlalu lembab
+  }
+}
+
+// Fungsi untuk mendapatkan koordinat untuk kelembapan tanah
+const getCoordinatesForSoilMoisture = (lat, lon) => {
+  let coordinates = [];
+  for (let i = 0; i < lat.length; i++) {
+    coordinates.push([lat[i], lon[i]]);
+  }
+  return coordinates;
+}
+
+
+
 
 // Fungsi untuk mendapatkan rentang tanggal
 const getDateRange = () => {
@@ -100,7 +149,7 @@ const getSoilMoistureData = async (task_id) => {
   const url_get = `https://api-connect.eos.com/api/gdw/api/${task_id}?api_key=${eosdaApiKey}`;
   
   let retries = 0;
-  const maxRetries = 5; 
+  const maxRetries = 2; 
   const delay = 5000; 
 
   try {
@@ -112,9 +161,9 @@ const getSoilMoistureData = async (task_id) => {
 
       if (response_get.data.result && response_get.data.result.length > 0) {
         console.log("Tugas selesai. Mengambil hasil...");
-        const soilMoistureResults = response_get.data.result[0].average; // Ambil hasil kelembapan tanah
-        console.log("Data Soil Moisture:", soilMoistureResults);
-        return soilMoistureResults;
+        soilMoisture = response_get.data.result[0].average; // Ambil hasil kelembapan tanah
+        console.log("Data Soil Moisture:", soilMoisture);
+        return soilMoisture;
       } else {
         console.log("Tugas belum selesai. Menunggu...");
         retries++;
@@ -190,6 +239,35 @@ const classifyWeather = (weatherCondition, temperature, windSpeed) => {
 };
 
 
+
+// Fungsi untuk mendapatkan kondisi cuaca yang paling banyak muncul
+const getMostFrequentWeatherCondition = (conditions) => {
+  const weatherCount = {};
+
+  // Menghitung frekuensi setiap kondisi cuaca
+  conditions.forEach(condition => {
+    weatherCount[condition] = (weatherCount[condition] || 0) + 1;
+  });
+
+  // Temukan kondisi cuaca dengan frekuensi tertinggi
+  let mostFrequent = '';
+  let maxCount = 0;
+
+  Object.keys(weatherCount).forEach(condition => {
+    if (weatherCount[condition] > maxCount && condition !== 'NORMAL') {
+      mostFrequent = condition;
+      maxCount = weatherCount[condition];
+    }
+  });
+
+  // Jika semua kondisi cuaca adalah 'NORMAL', kita tetap pilih salah satunya
+  if (mostFrequent === '') {
+    mostFrequent = 'NORMAL';
+  }
+
+  return mostFrequent;
+};
+
 // Fungsi utama untuk menggabungkan data dan melakukan klasifikasi
 const processWeatherAndSoilData = async (coordinates) => {
   const results = [];
@@ -216,77 +294,211 @@ const processWeatherAndSoilData = async (coordinates) => {
   // Array untuk menyimpan semua hasil
 
   // Proses semua data cuaca setiap 3 jam untuk 5 hari ke depan
-  weatherData.list.forEach(entry => {
-    const temperature = entry.main.temp;
-    const weatherCondition = entry.weather[0].description;
-    const windSpeed = entry.wind.speed;
+weatherData.list.forEach(entry => {
+  const temperature = entry.main.temp;
+  const weatherCondition = entry.weather[0].description;
+  const windSpeed = entry.wind.speed;
 
-    // Klasifikasikan cuaca
-    const weatherClassification = classifyWeather(weatherCondition, temperature, windSpeed);
+  // Ambil tanggal dari "DATE TIME" (format: "2025-08-06 15:00:00")
+  const date = entry.dt_txt.split(' ')[0]; // Ambil tanggal (misalnya "2025-08-06")
 
-    // Tentukan jenis tanaman berdasarkan cuaca
-    const cropType = "RICE";
+  // Tentukan cuaca dengan mengklasifikasikan kondisi cuaca
+  const weatherClassification = classifyWeather(weatherCondition, temperature, windSpeed);
 
-    // Gabungkan hasil dalam objek untuk setiap data cuaca
-    results.push({
-      "CROP TYPE": cropType,
-      "SOIL TYPE": soilType,
-      "REGION": region,
-      "TEMPERATURE": temperature,
-      "WEATHER CONDITION": weatherClassification,
-      "DATE TIME": entry.dt_txt
+  const crop_type = cropType;
+
+  // Tentukan apakah kita sudah punya data untuk tanggal ini
+  let dayIndex = temperatureFor5Days.findIndex(day => day.date === date);
+
+  
+  if (dayIndex === -1) {
+    // Jika belum ada data untuk tanggal ini, tambahkan objek baru untuk suhu dan cuaca
+    temperatureFor5Days.push({
+      date: date,
+      min: temperature,
+      max: temperature
     });
+    weatherFor5Days.push({
+      date: date,
+      conditions: [weatherClassification] // Array untuk menyimpan kondisi cuaca yang sudah diklasifikasikan
+    });
+  } else {
+    // Jika sudah ada, update min/max temperature dan kondisi cuaca
+    if (temperature < temperatureFor5Days[dayIndex].min) {
+      temperatureFor5Days[dayIndex].min = temperature;
+    }
+    if (temperature > temperatureFor5Days[dayIndex].max) {
+      temperatureFor5Days[dayIndex].max = temperature;
+    }
+    weatherFor5Days[dayIndex].conditions.push(weatherClassification); // Menambahkan cuaca yang sudah diklasifikasikan
+  }
+
+  // Gabungkan hasil dalam objek untuk setiap data cuaca
+  results.push({
+    "CROP TYPE": crop_type,
+    "SOIL TYPE": soilType,
+    "REGION": region,
+    "TEMPERATURE": temperature,
+    "WEATHER CONDITION": weatherClassification, // Kondisi cuaca yang sudah diklasifikasikan
+    "DATE TIME": entry.dt_txt
   });
+  });
+
+  // Proses untuk memilih kondisi cuaca yang paling sering muncul per tanggal
+ weatherFor5Days.forEach(day => {
+  // Ambil kondisi cuaca yang paling sering muncul
+  const mostFrequentCondition = getMostFrequentWeatherCondition(day.conditions);
+
+  // Update array `weatherFor5Days` untuk hanya menyimpan kondisi cuaca yang paling sering muncul
+  day.conditions = [mostFrequentCondition]; // Hanya satu kondisi cuaca yang paling banyak muncul
+  console.log(`Most frequent weather condition for ${day.date}: ${mostFrequentCondition}`);
+});
 
   // Menampilkan hasil
   console.log("Processed results for each 3-hour interval:", results);
   return results;
+
+
 };
 
-
-
-
-
-const data = {
-  "SOIL TYPE": "HUMID",  // Ganti dengan data yang sesuai
-  "REGION": "HUMID",     // Ganti dengan data yang sesuai
-  "TEMPERATURE": 30.5,   // Ganti dengan data yang sesuai
-  "WEATHER CONDITION": "SUNNY"  // Ganti dengan data yang sesuai
-};
 
 const sendToFlaskAPI = async (result) => {
   try {
-    const response = await axios.post('http://127.0.0.1:5000/predict', result);
-    console.log("Response dari Flask API:", response.data);
+    // Mengirim data ke Flask API untuk prediksi
+    const modelResult = await axios.post('http://127.0.0.1:5000/predict', result);
+    console.log("Response dari Flask API:", modelResult.data);
+
+    // Mengelompokkan hasil prediksi berdasarkan tanggal dan menghitung rata-rata
+    modelResult.data.forEach(prediction => {
+      const predictionDate = prediction.date.split(' ')[0];  // Ambil tanggal saja (misalnya "2025-08-07")
+      const predictionValue = prediction.prediction[0]; // Ambil nilai prediksi
+
+      // Cek apakah sudah ada tanggal yang sama di weatherFor5Days
+      let dayIndex = waterRequirementFor5Days.findIndex(day => day.date === predictionDate);
+
+      if (dayIndex !== -1) {
+        // Jika tanggal sudah ada, pastikan array predictions terinisialisasi
+        if (!waterRequirementFor5Days[dayIndex].predictions) {
+          waterRequirementFor5Days[dayIndex].predictions = [];
+        }
+
+        // Tambahkan nilai prediksi
+        waterRequirementFor5Days[dayIndex].predictions.push(predictionValue);
+      } else {
+        // Jika tanggal belum ada, buat objek baru dengan prediksi
+        waterRequirementFor5Days.push({
+          date: predictionDate,
+          predictions: [predictionValue]
+        });
+      }
+    });
+
+    // Menghitung rata-rata prediksi untuk setiap tanggal
+    waterRequirementFor5Days.forEach(day => {
+      // Menghitung rata-rata prediksi
+      const totalPrediction = day.predictions.reduce((sum, value) => sum + value, 0);
+      const averagePrediction = (totalPrediction / day.predictions.length).toFixed(2); // Membatasi 2 angka di belakang koma
+
+      // Menyimpan rata-rata prediksi dan menghapus kolom conditions
+      day.prediction = [parseFloat(averagePrediction)];
+
+      // Menghapus kolom conditions
+      delete day.conditions;
+
+      // Menampilkan hasil rata-rata prediksi untuk setiap tanggal
+      console.log(`Average prediction for ${day.date}: ${averagePrediction}`);
+    });
+
+    // Menampilkan weatherFor5Days setelah semua data diproses
+    console.log("Processed weatherFor5Days:", waterRequirementFor5Days);
+
   } catch (error) {
     console.error("Terjadi kesalahan saat mengirim data ke Flask:", error);
   }
 };
 
+
+
+
+
+
 // Kirim data ke Flask API
 
 // Memulai pengambilan dan pemrosesan data
 const main = async () => {
+  // Proses untuk mengambil dan memproses data cuaca dan kelembapan tanah
   const results = await processWeatherAndSoilData(coordinatesForWeather);
+  
+  // Menampilkan hasil akhir
   console.log("Final result:", results);
 
-  sendToFlaskAPI(results);
+  // Menampilkan variabel terkait kelembapan tanah dan optimal moisture
+  optimalMoisture = getCropOptimalSoilMoisture(cropType); // Menentukan kelembapan optimal berdasarkan cropType
+  console.log("Optimal Moisture Range:", optimalMoisture); // Output rentang kelembapan optimal
+
+
+  // Menampilkan data kelembapan tanah
+  console.log("Soil Moisture:", soilMoisture); // output, ini dari API
+
+  //Status tanah
+  soilStatus = getSoilStatus(cropType,soilMoisture); // Menentukan kelembapan optimal berdasarkan cropType
+  console.log("Soil Status:", soilStatus); // output
+
+  // Menampilkan hasil-hasil untuk 5 hari ke depan
+  console.log("Temperature for 5 Days:", temperatureFor5Days);  // Output suhu untuk 5 hari
+  console.log("Weather for 5 Days:", weatherFor5Days); // Output cuaca untuk 5 hari
+  
+  // Jika ingin mengirim ke Flask API, uncomment line berikut
+  await sendToFlaskAPI(results);
+  console.log("Water Requirement for 5 Days:", waterRequirementFor5Days); // Output kebutuhan air untuk 5 hari
 };
 
-// Jalankan proses utama
+main()
+// // Jalankan proses utama
 
-main();
+// // API endpoint untuk menerima data dari Next.js
+// app.post('/getFieldData', (req, res) => {
+//   console.log("Received data from Next.js:", req.body);
+
+//   const { crop_type, lat, lon, soil_moisture } = req.body;  // Mengambil data dari request body
+//   console.log("Received crop_type:", crop_type);
+//   console.log("Received lat:", lat);
+//   console.log("Received lon:", lon);
+//   console.log("Received soil_moisture:", soil_moisture);
+
+//   // Lakukan pemrosesan yang diperlukan
+//   cropType = crop_type;  // Menyimpan crop_type ke variabel global
+//   optimalMoisture = getCropOptimalSoilMoisture(crop_type);  // Menentukan kelembapan tanah optimal berdasarkan crop_type
+//   coordinatesForSoilMoisture = getCoordinatesForSoilMoisture(lat, lon);  // Menyimpan koordinat untuk kelembapan tanah
+//   coordinatesForWeather = [lat[0], lon[0]];  // Menyimpan koordinat pertama untuk cuaca
+
+//   // Mendapatkan status kelembapan tanah
+//   soilStatus = getSoilStatus(cropType, soil_moisture);
+
+//   // Kirimkan respons ke Next.js bahwa data sudah diterima dan diproses
+//   res.json({
+//     status: 'success',
+//     message: 'Data received successfully!',
+//     crop_type: cropType,  // Mengirim kembali data yang diterima
+//     optimal_moisture: optimalMoisture,
+//     soil_status: soilStatus,  // Menyertakan status kelembapan tanah
+//     coordinates_for_soil_moisture: coordinatesForSoilMoisture,
+//     coordinates_for_weather: coordinatesForWeather
+//   });
+
+
+// });
+
 
 
 app.post('/receivePrediction', (req, res) => {
   console.log("Received data from Flask API:", req.body);
-  
-  // Lakukan proses yang diinginkan dengan data yang diterima di sini
-  // Misalnya, kirimkan kembali ke client atau gunakan dalam model lainnya
+
   
   res.json({ status: 'success', message: 'Data received successfully!' });
 });
 
-app.listen(8000, () => {
-  console.log("Server listening on port 8000...");
-});
+
+// app.listen(8000, () => {
+//   console.log("Server listening on port 8000...");
+// });

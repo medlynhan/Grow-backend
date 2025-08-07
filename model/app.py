@@ -78,7 +78,9 @@ def predict():
         # Simpan hasil prediksi dan confidence ke dalam list results
         results.append({
             'prediction': y_pred.tolist(),
-            'confidence': confidence
+            'confidence': confidence,
+            'date'  : item['DATE TIME']
+
         })
 
     # Kirim data hasil prediksi ke Node.js menggunakan requests
